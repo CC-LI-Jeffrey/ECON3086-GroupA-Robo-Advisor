@@ -1,6 +1,6 @@
 import pandas as pd
-import numpy as np
-# import yfinance as yf  # Member 2 will use this
+import yfinance as yf  # Member 2 will use this
+
 
 # Member 2: Data Pipeline & ETF Universe
 # Your job: Scrape/download real historical data and define the static ETF universe.
@@ -33,7 +33,7 @@ def get_etf_universe():
     return universe
 
 
-def fetch_etf_data(tickers: list, period: str = "5y") -> pd.DataFrame:
+def fetch_etf_data(tickers, period: str = "5y"):
     """
     Given a list of tickers, returns a pandas DataFrame of historical adjusted close prices.
     Columns = tickers, Index = Date.
@@ -41,12 +41,25 @@ def fetch_etf_data(tickers: list, period: str = "5y") -> pd.DataFrame:
     # MOCK DATA: Member 2 needs to use yfinance to fetch REAL data here!
     # Example: data = yf.download(tickers, period=period)['Adj Close']
 
-    dates = pd.date_range(start="2020-01-01", periods=100, freq="B")
-    mock_prices = np.random.normal(100, 5, size=(100, len(tickers)))
-    df = pd.DataFrame(mock_prices, index=dates, columns=tickers)
+    # Get data form yFinance
+    df = yf.download(tickers, period=period)
 
-    # Make sure price trends slightly upwards just for testing visual representation
-    for col in df.columns:
-        df[col] = df[col] + np.linspace(0, 50, 100)
+    # Cannot get the data from yFinance
+    if df.empty:
+        print(f"No data found for tickers {tickers}")
+        return pd.DataFrame()
 
-    return df
+    # Handle Stock Split,
+    if 'Adj Close' in df.columns:
+        price_df = df['Adj Close']
+    else:
+        price_df = df['Close']
+
+    # If data missing, fill with the prev/next data
+    price_df = price_df.ffill().bfill()
+
+    # If only 1 ETF, change it to dataframe
+    if isinstance(price_df, pd.Series):
+        price_df = price_df.to_frame()
+
+    return price_df
