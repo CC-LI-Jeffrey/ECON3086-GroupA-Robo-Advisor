@@ -44,8 +44,13 @@ panic_response = st.sidebar.radio(
 
 preferred_categories = st.sidebar.multiselect(
     "Preferred ETF Categories", 
-    ["Technology", "Healthcare", "Real Estate", "Bonds", "Commodities", "Broad Market"],
-    default=["Broad Market", "Technology"]
+    [
+        "Broad US Equity", "International Equity", "Global Equity", "Small/Mid Cap Equity", 
+        "Growth Equity", "Value & Dividends", "Technology", "Healthcare", "Financials", 
+        "Energy", "Industrials", "Real Estate", "Treasury Bonds", 
+        "Corporate & Broad Bonds", "Commodities", "Crypto"
+    ],
+    default=["Broad US Equity", "Technology"]
 )
 
 if st.sidebar.button("Generate Portfolio"):
