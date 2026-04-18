@@ -16,7 +16,32 @@ st.markdown("Welcome! Please fill out your profile below to get a recommended ET
 st.sidebar.header("User Profile")
 age = st.sidebar.slider("Age", min_value=18, max_value=100, value=30)
 income = st.sidebar.number_input("Annual Income ($)", min_value=0, value=75000, step=5000)
-risk_tolerance = st.sidebar.selectbox("Risk Tolerance", ["Low", "Medium", "High"], index=1)
+
+st.sidebar.header("Financial Context")
+init_investment = st.sidebar.number_input("Initial Investment ($)", min_value=1000, value=10000, step=1000)
+monthly_add = st.sidebar.number_input("Monthly Contribution ($)", min_value=0, value=500, step=100)
+
+st.sidebar.header("Risk & Goals")
+horizon = st.sidebar.slider("Investment Horizon (Years)", 1, 40, 20)
+
+risk_tolerance = st.sidebar.selectbox(
+    "Risk Tolerance", 
+    ["Low", "Medium", "High"], 
+    index=1,
+    help="Think about your financial flexibility and obligations."
+)
+st.sidebar.caption(
+    "🎯 **Guide:**\n" 
+    "- **Low:** Heavy obligations (e.g., paying a mortgage, children's tuition, tight budget). Cannot afford significant capital loss.\n"
+    "- **Medium:** Stable income and manageable debt. Comfortable with standard market fluctuations.\n"
+    "- **High:** High disposable income, few dependents. Willing to endure large drops for maximum long-term growth."
+)
+
+panic_response = st.sidebar.radio(
+    "If your portfolio dropped 20% in one month, what would you do?",
+    ["Sell everything to protect what's left", "Do nothing and wait for recovery", "See it as a discount and buy more"]
+)
+
 preferred_categories = st.sidebar.multiselect(
     "Preferred ETF Categories", 
     ["Technology", "Healthcare", "Real Estate", "Bonds", "Commodities", "Broad Market"],
@@ -26,9 +51,14 @@ preferred_categories = st.sidebar.multiselect(
 if st.sidebar.button("Generate Portfolio"):
     st.divider()
 
+    # --- INPUT VALIDATION ---
+    if len(preferred_categories) == 0:
+        st.error("⚠️ Please select at least one Preferred ETF Category in the sidebar to proceed.")
+        st.stop()
+
     # --- 2. GET ALLOCATION ---
     # Call Member 4's function
-    weights = allocate_portfolio(age, risk_tolerance, income, preferred_categories)
+    weights = allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response)
     
     st.subheader("1. Recommended Allocation")
     col1, col2 = st.columns([1, 2])
@@ -58,8 +88,13 @@ if st.sidebar.button("Generate Portfolio"):
     
     # Display Metrics
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-    m_col1.metric("Annualized Return", f"{metrics['Portfolio Return']*100:.2f}%", f"vs {metrics['Benchmark Return']*100:.2f}% Bench")
-    m_col2.metric("Portfolio Volatility", f"{metrics['Portfolio Volatility']*100:.2f}%")
+    
+    # Calculate projected future value simply
+    future_val = init_investment * (1 + metrics['Portfolio Return'])**horizon
+    
+    m_col1.metric("Projected Value", f"${future_val:,.0f}", f"In {horizon} yrs")
+    m_col2.metric("Annualized Return", f"{metrics['Portfolio Return']*100:.2f}%", f"vs {metrics['Benchmark Return']*100:.2f}% Bench")
+    # m_col3.metric("Portfolio Volatility", f"{metrics['Portfolio Volatility']*100:.2f}%")
     m_col3.metric("Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}")
     m_col4.metric("Max Drawdown", f"{metrics['Max Drawdown']*100:.2f}%")
 

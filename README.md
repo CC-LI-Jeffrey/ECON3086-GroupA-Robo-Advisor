@@ -35,7 +35,7 @@ We have split the project into 5 modular files. Everyone can work on their file 
 To work in parallel, we agree on inputs and outputs for our main functions. Each `.py` file currently returns **fake (mock) data**. 
 Your job is to replace the fake data inside your assigned file with the *real* calculated data using pandas, numpy, etc.
 
-*   `allocate_portfolio(age, risk_tolerance, income, preferred_categories)` returns a dictionary: `{"VOO": 0.6, "BND": 0.4}`
+*   `allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response)` returns a dictionary: `{"VOO": 0.6, "BND": 0.4}`
 *   `fetch_etf_data(tickers, period)` returns a `pandas.DataFrame` where columns are tickers and the index is dates.
 *   `calculate_metrics(portfolio_cum_returns, benchmark_cum_returns)` returns a dictionary of floats: `{"Annualized Return": 0.08, "Sharpe": 1.2, ...}`
 
