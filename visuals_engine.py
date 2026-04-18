@@ -64,49 +64,122 @@ def plot_allocation(weights: dict):
         hoverinfo='text',
         textposition='inside',
         textinfo='percent+label',
-        textfont=dict(size=12, color='white', family='Arial Black'),
+        textfont=dict(size=18, color='white', family='Arial Black'),
         hovertemplate='%{hovertext}<extra></extra>',
-        pull=[0.05] * len(labels)
+        pull=[0.05] * len(labels),
+        hole=0,
+        sort=False
     )])
-    
+
     fig.update_traces(
         marker=dict(line=dict(color='white', width=2)),
         selector=dict(type='pie')
     )
+
+    fig.update_layout(
+        showlegend=True,
+        legend=dict(
+            orientation='v',
+            font=dict(size=16, color='white', family='Arial'),
+            x=1.05,
+            y=0.5,
+            xanchor='left',
+            yanchor='middle',
+            bgcolor='rgba(0,0,0,0)'
+        ),
+        margin=dict(t=40, b=40, l=40, r=40),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        height=600,
+        width=600
+    )
+
+    return fig
+    
+def plot_selection_metrics(selection_metrics: dict):
+    """
+    Takes the output from the allocate_portfolio tournament and returns a bar chart 
+    showing why the winning ETF was chosen over its peers.
+    """
+    if not selection_metrics:
+        # Return an empty dummy figure if no metrics provided
+        return go.Figure()
+
+    # Flatten the nested dictionary into a list of rows for better Pandas ingestion
+    rows = []
+    for cat, data in selection_metrics.items():
+        winner = data['Winner']
+        for ticker, stats in data['Competitors'].items():
+            rows.append({
+                "Category": cat,
+                "Ticker": ticker,
+                "Is_Winner": "Winner" if ticker == winner else "Loser",
+                "Sharpe Ratio": stats["Sharpe"],
+                "Annualized Return %": stats["Return"],
+                "Annualized Volatility %": stats["Volatility"]
+            })
+            
+    df = pd.DataFrame(rows)
+    
+    # We only want to plot categories that had actual competition (more than 1 ETF)
+    competition_cats = df.groupby('Category').filter(lambda x: len(x) > 1)
+    
+    if competition_cats.empty:
+        # If all chosen categories only had 1 candidate, don't show the chart
+        fig = go.Figure()
+        fig.update_layout(
+            title="No competitive categories selected (Each had only 1 candidate ETF available).",
+            paper_bgcolor='rgba(240, 245, 250, 1)'
+        )
+        return fig
+
+    # Sort the data so winners are easy to spot and categories are grouped
+    competition_cats = competition_cats.sort_values(by=['Category', 'Sharpe Ratio'], ascending=[True, False])
+
+    # Plot the Sharpe Ratios grouped by Category and split by Ticker
+    fig = px.bar(
+        competition_cats, 
+        x="Ticker", 
+        y="Sharpe Ratio", 
+        color="Is_Winner",
+        facet_col="Category",
+        color_discrete_map={"Winner": "#2ca02c", "Loser": "#7f7f7f"}, # Green for winner, Gray for loser
+        text="Ticker", # Show the ticker name on the bar
+        hover_data=["Annualized Return %", "Annualized Volatility %"],
+        title="<b>ETF Selection Tournament (Highest Sharpe Ratio Wins)</b>"
+    )
+    
+    # Text appearance and X-axis configuration for facets
+    fig.update_traces(textposition='auto', textangle=-90)
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1])) # Removes 'Category=' from the subplot titles
+    fig.update_xaxes(matches=None, showticklabels=False, title=None) # Removes the redundant ticker labels on X axis
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(128,128,128,0.2)') # Add subtle grid lines for readability
     
     fig.update_layout(
         title=dict(
-            text="<b>Portfolio Allocation</b> - Target Weights",
-            font=dict(size=18, color='#2c3e50', family='Arial'),
+            text="<b>ETF Selection Tournament (Highest Sharpe Ratio)</b>", 
+            font=dict(size=20, family='Arial'), 
             x=0.5,
-            xanchor='center'
+            y=0.95, # Push title up
+            xanchor='center',
+            yanchor='top'
         ),
-        font=dict(size=12, family='Arial', color='#2c3e50'),
-        showlegend=True,
-        margin=dict(t=60, b=10, l=50, r=120),
-        paper_bgcolor='rgba(240, 245, 250, 1)',
-        plot_bgcolor='rgba(240, 245, 250, 1)',
-        height=450,
-        hoverlabel=dict(
-            bgcolor='#2E86AB',
-            font=dict(family='Arial', size=14, color='white'),
-            bordercolor='#1a4d7a',
-            namelength=-1
-        ),
-        hovermode='closest',
+        font=dict(size=12, family='Arial'),
+        legend_title="Status",
+        paper_bgcolor='rgba(0,0,0,0)', # Transparent to adapt to Streamlit dark/light mode
+        plot_bgcolor='rgba(0,0,0,0)',  # Transparent to adapt to Streamlit dark/light mode
+        yaxis_title="Historical Sharpe Ratio (Higher is Better)",
+        height=450, # Give it a bit more room to breathe
+        margin=dict(t=100, b=20, l=10, r=10), # Extra top margin for sub-titles
         legend=dict(
-            orientation="v",
-            yanchor="middle",
-            y=0.5,
             xanchor="left",
+            yanchor="top",
+            y=1.0,
             x=1.02,
-            bgcolor='rgba(255, 255, 255, 0.9)',
-            bordercolor='#2E86AB',
-            borderwidth=1.5,
             font=dict(size=11, family='Arial')
         )
     )
-    
+
     return fig
 
 def plot_performance(portfolio_cumulative: pd.Series, benchmark_cumulative: pd.Series):

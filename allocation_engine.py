@@ -23,19 +23,23 @@ CATEGORY_TICKER_MAP = {
     "Crypto": ["IBIT", "FBTC"]
 }
 
-def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str, price_df: pd.DataFrame = None) -> dict:
+def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str, price_df: pd.DataFrame = None) -> tuple:
     """
     Data-Driven Portfolio Allocation:
     1. Selects the BEST ETF from each category based on historical Sharpe Ratio.
     2. Builds a portfolio using Inverse-Volatility or Markowitz-like logic.
+    Returns:
+        tuple: (weights_dict, selection_metrics_dict)
     """
     # Fallback to older signature if no data
     if price_df is None or price_df.empty:
-        return _rule_based_allocation(age, risk_tolerance, income, preferred_categories, horizon, panic_response)
+        weights = _rule_based_allocation(age, risk_tolerance, income, preferred_categories, horizon, panic_response)
+        return weights, {}
 
     # --- 1. DATA-DRIVEN ETF SELECTION (Intra-Category) ---
     daily_returns = price_df.pct_change().dropna()
     chosen_assets = {}
+    selection_metrics = {} # To store the "Why" for Member 5 to visualize
     
     for cat in preferred_categories:
         if cat in CATEGORY_TICKER_MAP:
@@ -44,16 +48,62 @@ def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_c
                 # Pick the one with the highest Sharpe Ratio
                 best_ticker = None
                 best_sharpe = -np.inf
+                cat_metrics = {}
+                
                 for t in candidates:
                     mean_ret = daily_returns[t].mean() * 252
                     vol = daily_returns[t].std() * np.sqrt(252)
                     sharpe = (mean_ret - 0.02) / vol if vol > 0 else 0
+                    
+                    # Store metrics for all candidates in this category
+                    cat_metrics[t] = {
+                        "Sharpe": round(sharpe, 2),
+                        "Return": round(mean_ret * 100, 2),
+                        "Volatility": round(vol * 100, 2)
+                    }
+                    
                     if sharpe > best_sharpe:
                         best_sharpe = sharpe
                         best_ticker = t
+                        
                 if best_ticker:
                     chosen_assets[cat] = best_ticker
+                    # Store the winning ticker and the stats of all competitors
+                    selection_metrics[cat] = {
+                        "Winner": best_ticker,
+                        "Competitors": cat_metrics
+                    }
                     
+    # --- 1.5 CORRELATION PENALTY (Avoid Concentration Risk) ---
+    # If two chosen assets are highly correlated (> 0.90), we want to flag it.
+    # We will remove the lower-performing one to prevent overlaps (e.g., QQQ and VUG).
+    if len(chosen_assets) > 1:
+        selected_tickers = list(chosen_assets.values())
+        corr_matrix = daily_returns[selected_tickers].corr()
+        
+        to_drop = set()
+        for i in range(len(selected_tickers)):
+            for j in range(i + 1, len(selected_tickers)):
+                ticker_a = selected_tickers[i]
+                ticker_b = selected_tickers[j]
+                
+                # Check if correlation is extremely high
+                if corr_matrix.loc[ticker_a, ticker_b] > 0.90:
+                    # They are too similar. Keep the one with the higher Sharpe Ratio.
+                    sharpe_a = (daily_returns[ticker_a].mean() * 252 - 0.02) / (daily_returns[ticker_a].std() * np.sqrt(252))
+                    sharpe_b = (daily_returns[ticker_b].mean() * 252 - 0.02) / (daily_returns[ticker_b].std() * np.sqrt(252))
+                    
+                    if sharpe_a > sharpe_b:
+                        to_drop.add(ticker_b)
+                        print(f"Correlation Flag: Dropped {ticker_b} in favor of {ticker_a} (Corr: {corr_matrix.loc[ticker_a, ticker_b]:.2f})")
+                    else:
+                        to_drop.add(ticker_a)
+                        print(f"Correlation Flag: Dropped {ticker_a} in favor of {ticker_b} (Corr: {corr_matrix.loc[ticker_a, ticker_b]:.2f})")
+        
+        # Remove the correlated losers from the chosen assets dictionary
+        chosen_assets = {cat: ticker for cat, ticker in chosen_assets.items() if ticker not in to_drop}
+
+
     # Ensure we actually picked *something*
     if not chosen_assets:
         return {"VOO": 0.60, "BND": 0.40}
@@ -103,8 +153,9 @@ def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_c
         # If no equities selected but equities are needed, force VOO
         portfolio["VOO"] = equity_pct
 
-    # Return normalized and rounded dictionary
-    return {k: round(v, 4) for k, v in portfolio.items() if v > 0}
+    # Return normalized and rounded dictionary, plus the selection metrics
+    final_weights = {k: round(v, 4) for k, v in portfolio.items() if v > 0}
+    return final_weights, selection_metrics
 
 def _rule_based_allocation(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str) -> dict:
     """

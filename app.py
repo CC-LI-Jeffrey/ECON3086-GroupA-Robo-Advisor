@@ -71,12 +71,21 @@ if st.sidebar.button("Generate Portfolio"):
             candidate_tickers.extend(CATEGORY_TICKER_MAP[cat])
             
     with st.spinner("Analyzing historical market data and optimizing portfolio..."):
-        historical_prices = fetch_etf_data(candidate_tickers + ["SPY"], "5y")
+        # Always fetch SPY (benchmark) and VOO/BND (fallbacks used by the allocation engine)
+        historical_prices = fetch_etf_data(candidate_tickers + ["SPY", "VOO", "BND"], "5y")
         
         # --- 3. ALLOCATE (Selection & Optimization) ---
-        weights = allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response, historical_prices)
+        weights, selection_metrics = allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response, historical_prices)
     
     st.subheader("1. Recommended Allocation")
+    
+    # NEW FEATURE: Show the user WHY we picked these ETFs
+    st.markdown("### The ETF Selection Tournament")
+    st.markdown("We evaluated all possible ETFs in your chosen categories based on their 5-year historical risk-adjusted return (Sharpe Ratio). For each category, **only the ETF with the highest score was selected for your portfolio.**")
+    
+    from visuals_engine import plot_selection_metrics
+    st.plotly_chart(plot_selection_metrics(selection_metrics), use_container_width=True)
+
     col1, col2 = st.columns([1, 2])
     
     with col1:
