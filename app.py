@@ -61,9 +61,20 @@ if st.sidebar.button("Generate Portfolio"):
         st.error("⚠️ Please select at least one Preferred ETF Category in the sidebar to proceed.")
         st.stop()
 
-    # --- 2. GET ALLOCATION ---
-    # Call Member 4's function
-    weights = allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response)
+    # --- 2. FETCH CANDIDATE DATA ---
+    from allocation_engine import CATEGORY_TICKER_MAP
+    
+    # Collect all potential tickers from the user's chosen categories
+    candidate_tickers = []
+    for cat in preferred_categories:
+        if cat in CATEGORY_TICKER_MAP:
+            candidate_tickers.extend(CATEGORY_TICKER_MAP[cat])
+            
+    with st.spinner("Analyzing historical market data and optimizing portfolio..."):
+        historical_prices = fetch_etf_data(candidate_tickers + ["SPY"], "5y")
+        
+        # --- 3. ALLOCATE (Selection & Optimization) ---
+        weights = allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response, historical_prices)
     
     st.subheader("1. Recommended Allocation")
     col1, col2 = st.columns([1, 2])
@@ -78,17 +89,16 @@ if st.sidebar.button("Generate Portfolio"):
         fig_pie = plot_allocation(weights)
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- 3. FETCH DATA & GET METRICS ---
+    # --- 4. CALCULATE METRICS FOR DISPLAY ---
     st.subheader("2. Historical Backtest & Metrics")
     
-    # Call Member 2's data functions
-    tickers = list(weights.keys())
-    historical_prices = fetch_etf_data(tickers, "5y")
-    benchmark_prices = fetch_etf_data(["SPY"], "5y") # Assuming SPY is benchmark
+    # Filter the previously fetched data to just our optimized portfolio & benchmark
+    port_prices = historical_prices[list(weights.keys())]
+    bench_prices = historical_prices[["SPY"]]
     
     # Call Member 3's metric functions
-    port_cum_returns = calculate_cumulative_returns(historical_prices, weights)
-    bench_cum_returns = calculate_cumulative_returns(benchmark_prices, {"SPY": 1.0})
+    port_cum_returns = calculate_cumulative_returns(port_prices, weights)
+    bench_cum_returns = calculate_cumulative_returns(bench_prices, {"SPY": 1.0})
     metrics = calculate_metrics(port_cum_returns, bench_cum_returns)
     
     # Display Metrics

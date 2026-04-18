@@ -1,6 +1,9 @@
 # Member 4: Portfolio Allocation Logic
 # Your job: Write the logic that translates a user's profile into specific ETF weights.
 
+import numpy as np
+import pandas as pd
+
 CATEGORY_TICKER_MAP = {
     "Broad US Equity": ["VOO", "IVV", "SPY", "VTI", "RSP", "SCHX", "ITOT", "SCHB", "IWB", "VV", "DIA", "DFAC", "SPYM", "DYNF", "QUAL"],
     "International Equity": ["VXUS", "VEA", "IEMG", "VWO", "EFA", "VEU", "SCHF", "IXUS", "VGK", "SPDW", "IDEV", "EFV"],
@@ -20,7 +23,90 @@ CATEGORY_TICKER_MAP = {
     "Crypto": ["IBIT", "FBTC"]
 }
 
-def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str) -> dict:
+def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str, price_df: pd.DataFrame = None) -> dict:
+    """
+    Data-Driven Portfolio Allocation:
+    1. Selects the BEST ETF from each category based on historical Sharpe Ratio.
+    2. Builds a portfolio using Inverse-Volatility or Markowitz-like logic.
+    """
+    # Fallback to older signature if no data
+    if price_df is None or price_df.empty:
+        return _rule_based_allocation(age, risk_tolerance, income, preferred_categories, horizon, panic_response)
+
+    # --- 1. DATA-DRIVEN ETF SELECTION (Intra-Category) ---
+    daily_returns = price_df.pct_change().dropna()
+    chosen_assets = {}
+    
+    for cat in preferred_categories:
+        if cat in CATEGORY_TICKER_MAP:
+            candidates = [t for t in CATEGORY_TICKER_MAP[cat] if t in daily_returns.columns]
+            if candidates:
+                # Pick the one with the highest Sharpe Ratio
+                best_ticker = None
+                best_sharpe = -np.inf
+                for t in candidates:
+                    mean_ret = daily_returns[t].mean() * 252
+                    vol = daily_returns[t].std() * np.sqrt(252)
+                    sharpe = (mean_ret - 0.02) / vol if vol > 0 else 0
+                    if sharpe > best_sharpe:
+                        best_sharpe = sharpe
+                        best_ticker = t
+                if best_ticker:
+                    chosen_assets[cat] = best_ticker
+                    
+    # Ensure we actually picked *something*
+    if not chosen_assets:
+        return {"VOO": 0.60, "BND": 0.40}
+
+    # --- 2. DATA-DRIVEN WEIGHT OPTIMIZATION (Inverse Volatility / Risk Parity) ---
+    # Determine the risk limits based on user profile
+    # The classic 110 - Age rule for baseline equity percentage
+    base_equity_pct = (110 - age) / 100.0
+    if risk_tolerance == "Low": base_equity_pct -= 0.15
+    elif risk_tolerance == "High": base_equity_pct += 0.10
+    if horizon < 5: base_equity_pct -= 0.20
+    elif horizon > 20: base_equity_pct += 0.10
+    if "Sell everything" in panic_response: base_equity_pct = min(base_equity_pct, 0.50)
+    
+    equity_pct = max(0.10, min(0.95, base_equity_pct))
+    bond_pct = 1.0 - equity_pct
+    
+    core_bonds = ["Treasury Bonds", "Corporate & Broad Bonds"]
+    bond_tickers = [t for cat, t in chosen_assets.items() if cat in core_bonds]
+    equity_tickers = [t for cat, t in chosen_assets.items() if cat not in core_bonds]
+
+    portfolio = {}
+
+    # Weighting the Bond portion
+    if bond_tickers:
+        vols = {t: daily_returns[t].std() for t in bond_tickers}
+        inv_vol_sum = sum(1.0 / v for v in vols.values() if v > 0)
+        for t, v in vols.items():
+            if v > 0:
+                portfolio[t] = ((1.0 / v) / inv_vol_sum) * bond_pct
+            else:
+                portfolio[t] = bond_pct / len(bond_tickers)
+    else:
+        # If no bonds selected but bonds are needed, force BND
+        portfolio["BND"] = bond_pct
+
+    # Weighting the Equity portion
+    if equity_tickers:
+        vols = {t: daily_returns[t].std() for t in equity_tickers}
+        inv_vol_sum = sum(1.0 / v for v in vols.values() if v > 0)
+        for t, v in vols.items():
+            if v > 0:
+                portfolio[t] = ((1.0 / v) / inv_vol_sum) * equity_pct
+            else:
+                portfolio[t] = equity_pct / len(equity_tickers)
+    else:
+        # If no equities selected but equities are needed, force VOO
+        portfolio["VOO"] = equity_pct
+
+    # Return normalized and rounded dictionary
+    return {k: round(v, 4) for k, v in portfolio.items() if v > 0}
+
+def _rule_based_allocation(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str) -> dict:
     """
     Takes user inputs (including preferred ETF categories) and returns a dictionary of ETF tickers and their decimal weights.
     Weights MUST sum to 1.0.
