@@ -182,7 +182,7 @@ def plot_selection_metrics(selection_metrics: dict):
 
     return fig
 
-def plot_performance(portfolio_cumulative: pd.Series, benchmark_cumulative: pd.Series):
+def plot_performance(portfolio_cumulative: pd.Series, benchmark_cumulative: pd.Series, benchmark_name: str = 'S&P 500'):
     """
     Takes cumulative return series for portfolio and benchmark and plots them on a line chart over time.
     Enhanced with drawdown visualization and professional styling.
@@ -238,10 +238,10 @@ def plot_performance(portfolio_cumulative: pd.Series, benchmark_cumulative: pd.S
         x=benchmark_cumulative.index, 
         y=benchmark_cumulative.values,
         mode='lines',
-        name='Benchmark (SPY)',
+        name=f'Benchmark ({benchmark_name})',
         line=dict(color='#A23B72', width=2.5, dash='dash'),
         customdata=benchmark_returns_series.values,
-        hovertemplate='<b>Benchmark (SPY)</b><br>Value: $%{y:.2f}<br>Return: %{customdata:.2f}%<extra></extra>'
+        hovertemplate=f'<b>Benchmark ({benchmark_name})</b><br>Value: $''%{y:.2f}<br>Return: %{customdata:.2f}%<extra></extra>'
     ))
     
     fig.update_layout(

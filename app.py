@@ -71,8 +71,8 @@ if st.sidebar.button("Generate Portfolio"):
             candidate_tickers.extend(CATEGORY_TICKER_MAP[cat])
             
     with st.spinner("Analyzing historical market data and optimizing portfolio..."):
-        # Always fetch SPY (benchmark) and VOO/BND (fallbacks used by the allocation engine)
-        historical_prices = fetch_etf_data(candidate_tickers + ["SPY", "VOO", "BND"], "5y")
+        # Always fetch ^SPX (benchmark) and VOO/BND (fallbacks used by the allocation engine)
+        historical_prices = fetch_etf_data(candidate_tickers + ["^SPX", "VOO", "BND"], "5y")
         
         # --- 3. ALLOCATE (Selection & Optimization) ---
         weights, selection_metrics = allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response, historical_prices)
@@ -103,11 +103,11 @@ if st.sidebar.button("Generate Portfolio"):
     
     # Filter the previously fetched data to just our optimized portfolio & benchmark
     port_prices = historical_prices[list(weights.keys())]
-    bench_prices = historical_prices[["SPY"]]
+    bench_prices = historical_prices[["^SPX"]]
     
     # Call Member 3's metric functions
     port_cum_returns = calculate_cumulative_returns(port_prices, weights)
-    bench_cum_returns = calculate_cumulative_returns(bench_prices, {"SPY": 1.0})
+    bench_cum_returns = calculate_cumulative_returns(bench_prices, {"^SPX": 1.0})
     metrics = calculate_metrics(port_cum_returns, bench_cum_returns)
     
     # Display Metrics
@@ -124,7 +124,7 @@ if st.sidebar.button("Generate Portfolio"):
 
     # --- 4. DISPLAY CHARTS ---
     # Call Member 5's line chart
-    fig_line = plot_performance(port_cum_returns, bench_cum_returns)
+    fig_line = plot_performance(port_cum_returns, bench_cum_returns, benchmark_name="S&P 500")
     st.plotly_chart(fig_line, use_container_width=True)
 
 else:
