@@ -30,7 +30,10 @@ def calculate_cumulative_returns(price_df: pd.DataFrame, weights: dict) -> pd.Se
             "None of the tickers in `weights` are present in `price_df` columns."
         )
 
-    prices = price_df[available].sort_index().dropna(how="all")
+    # Require every selected ticker to have a price on each day; otherwise the
+    # missing ticker would silently contribute 0% return for that day while its
+    # weight stayed unchanged, distorting the portfolio's exposure.
+    prices = price_df[available].sort_index().dropna(how="any")
 
     w = pd.Series({t: float(weights[t]) for t in available}, dtype=float)
     total = w.sum()
@@ -100,14 +103,30 @@ def calculate_metrics(
 
 
 def _prepare_cumulative(series: pd.Series) -> pd.Series:
-    """Validate, sort and clean a cumulative-return series."""
+    """Validate, sort and clean a cumulative-return series.
+
+    Cumulative returns must stay strictly positive (they represent growth of
+    $1). If we encounter non-positive values — usually a sign of corrupt
+    upstream data — we log a warning and truncate the series to everything
+    BEFORE the first bad point, rather than crashing the whole dashboard.
+    """
     if series is None or len(series) == 0:
         raise ValueError("Cumulative return series is empty.")
+
     s = pd.Series(series).sort_index().dropna()
-    if (s <= 0).any():
-        # Cumulative returns represent growth of $1 and must stay strictly
-        # positive; otherwise pct_change / log-based math would break.
-        raise ValueError("Cumulative return series contains non-positive values.")
+
+    bad_mask = s <= 0
+    if bad_mask.any():
+        first_bad = bad_mask.idxmax()
+        print(
+            f"[metrics_engine] Non-positive cumulative value at {first_bad}; "
+            f"truncating series to data before that point."
+        )
+        s = s.loc[: first_bad].iloc[:-1]
+        if len(s) == 0:
+            raise ValueError(
+                "Cumulative return series has no usable positive values."
+            )
     return s
 
 

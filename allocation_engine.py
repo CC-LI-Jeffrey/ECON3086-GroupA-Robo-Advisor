@@ -4,6 +4,29 @@
 import numpy as np
 import pandas as pd
 
+from ai import ai_analyze_portfolio, ai_pick_best_in_category
+from metrics_engine import (
+    RISK_FREE_RATE,
+    calculate_cumulative_returns,
+    calculate_metrics,
+)
+
+# Benchmark used when computing per-ticker `calculate_metrics` for the AI.
+# Must be available in `price_df` (app.py already fetches it alongside the
+# candidate tickers).
+BENCHMARK_TICKER = "^SPX"
+
+# Cache the ETF universe (expense ratios etc.) at import time. The CSV is
+# small and the function is idempotent, so loading once per process is fine.
+# Wrapped in try/except so missing/corrupt CSV does not break allocation.
+try:
+    from data_engine import get_etf_universe
+
+    _ETF_UNIVERSE = get_etf_universe()
+except Exception as _exc:  # noqa: BLE001
+    print(f"[allocation_engine] Could not load ETF universe: {_exc}")
+    _ETF_UNIVERSE = {}
+
 CATEGORY_TICKER_MAP = {
     "Broad US Equity": ["VOO", "IVV", "SPY", "VTI", "RSP", "SCHX", "ITOT", "SCHB", "IWB", "VV", "DIA", "DFAC", "SPYM", "DYNF", "QUAL"],
     "International Equity": ["VXUS", "VEA", "IEMG", "VWO", "EFA", "VEU", "SCHF", "IXUS", "VGK", "SPDW", "IDEV", "EFV"],
@@ -26,87 +49,188 @@ CATEGORY_TICKER_MAP = {
 def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str, price_df: pd.DataFrame = None) -> tuple:
     """
     Data-Driven Portfolio Allocation:
-    1. Selects the BEST ETF from each category based on historical Sharpe Ratio.
-    2. Builds a portfolio using Inverse-Volatility or Markowitz-like logic.
+    1. Selects the BEST ETF from each category. The AI is asked to pick using
+       per-ticker `calculate_metrics` output + expense ratio; if the AI is
+       unavailable or returns an invalid answer, we fall back to the highest
+       historical Sharpe Ratio.
+    2. Builds a portfolio using Inverse-Volatility / Risk-Parity-like logic.
+    3. Asks the AI to write a short qualitative analysis of the final
+       portfolio given the user's full questionnaire response.
     Returns:
-        tuple: (weights_dict, selection_metrics_dict)
+        tuple: (weights_dict, selection_metrics_dict, ai_analysis_text)
     """
     # Fallback to older signature if no data
     if price_df is None or price_df.empty:
         weights = _rule_based_allocation(age, risk_tolerance, income, preferred_categories, horizon, panic_response)
-        return weights, {}
+        return weights, {}, ""
+
+    # Pre-compute the benchmark cumulative once so per-ticker metrics share
+    # a consistent baseline.
+    bench_cum = None
+    if BENCHMARK_TICKER in price_df.columns:
+        try:
+            bench_cum = calculate_cumulative_returns(
+                price_df[[BENCHMARK_TICKER]], {BENCHMARK_TICKER: 1.0}
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[allocation_engine] Benchmark cumulative failed: {exc}")
+            bench_cum = None
+
+    # Build the user profile up-front so the AI can tailor BOTH the per-
+    # category pick and the final analysis to this specific investor.
+    user_profile = {
+        "age": age,
+        "income": income,
+        "risk_tolerance": risk_tolerance,
+        "horizon": horizon,
+        "panic_response": panic_response,
+        "preferred_categories": preferred_categories,
+    }
 
     # --- 1. DATA-DRIVEN ETF SELECTION (Intra-Category) ---
     daily_returns = price_df.pct_change().dropna()
     chosen_assets = {}
     selection_metrics = {} # To store the "Why" for Member 5 to visualize
-    
+
     for cat in preferred_categories:
-        if cat in CATEGORY_TICKER_MAP:
-            candidates = [t for t in CATEGORY_TICKER_MAP[cat] if t in daily_returns.columns]
-            if candidates:
-                # Pick the one with the highest Sharpe Ratio
-                best_ticker = None
-                best_sharpe = -np.inf
-                cat_metrics = {}
-                
-                for t in candidates:
-                    mean_ret = daily_returns[t].mean() * 252
-                    vol = daily_returns[t].std() * np.sqrt(252)
-                    sharpe = (mean_ret - 0.02) / vol if vol > 0 else 0
-                    
-                    # Store metrics for all candidates in this category
-                    cat_metrics[t] = {
-                        "Sharpe": round(sharpe, 2),
-                        "Return": round(mean_ret * 100, 2),
-                        "Volatility": round(vol * 100, 2)
-                    }
-                    
-                    if sharpe > best_sharpe:
-                        best_sharpe = sharpe
-                        best_ticker = t
-                        
-                if best_ticker:
-                    chosen_assets[cat] = best_ticker
-                    # Store the winning ticker and the stats of all competitors
-                    selection_metrics[cat] = {
-                        "Winner": best_ticker,
-                        "Competitors": cat_metrics
-                    }
+        if cat not in CATEGORY_TICKER_MAP:
+            continue
+        candidates = [t for t in CATEGORY_TICKER_MAP[cat] if t in daily_returns.columns]
+        if not candidates:
+            continue
+
+        # `cat_metrics` keeps the legacy keys (Sharpe / Return / Volatility) so
+        # `visuals_engine.plot_selection_metrics` keeps working unchanged.
+        # `ai_payload` carries a richer, AI-friendly view including expense ratio.
+        cat_metrics = {}
+        ai_payload = {}
+        best_ticker_by_sharpe = None
+        best_sharpe = -np.inf
+
+        for t in candidates:
+            # Try the unified metrics_engine path first so the AI sees the
+            # exact same numbers the dashboard would later report.
+            ticker_metrics = None
+            if bench_cum is not None:
+                try:
+                    cum_t = calculate_cumulative_returns(price_df[[t]], {t: 1.0})
+                    ticker_metrics = calculate_metrics(cum_t, bench_cum)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[allocation_engine] metrics for {t} failed: {exc}")
+                    ticker_metrics = None
+
+            if ticker_metrics is not None:
+                ann_ret = float(ticker_metrics.get("Portfolio Return", 0.0))
+                ann_vol = float(ticker_metrics.get("Portfolio Volatility", 0.0))
+                sharpe = float(ticker_metrics.get("Sharpe Ratio", 0.0))
+                mdd = float(ticker_metrics.get("Max Drawdown", 0.0))
+            else:
+                # Lightweight fallback (mean / std on daily returns).
+                ann_ret = float(daily_returns[t].mean() * 252)
+                ann_vol = float(daily_returns[t].std() * np.sqrt(252))
+                sharpe = (ann_ret - RISK_FREE_RATE) / ann_vol if ann_vol > 0 else 0.0
+                mdd = 0.0
+
+            expense_ratio = (
+                _ETF_UNIVERSE.get(t, {}).get("Expense Ratio")
+                if _ETF_UNIVERSE
+                else None
+            )
+
+            cat_metrics[t] = {
+                "Sharpe": round(sharpe, 2),
+                "Return": round(ann_ret * 100, 2),
+                "Volatility": round(ann_vol * 100, 2),
+            }
+            ai_payload[t] = {
+                "Annualized Return": round(ann_ret, 4),
+                "Volatility": round(ann_vol, 4),
+                "Sharpe Ratio": round(sharpe, 2),
+                "Max Drawdown": round(mdd, 4),
+                "Expense Ratio": expense_ratio,
+            }
+
+            if sharpe > best_sharpe:
+                best_sharpe = sharpe
+                best_ticker_by_sharpe = t
+
+        if not cat_metrics:
+            continue
+
+        # AI tournament: ask AI to pick using metrics + expense ratio +
+        # the user's questionnaire (so the choice is tailored, not generic).
+        ai_pick = ai_pick_best_in_category(cat, ai_payload, user_profile)
+        if ai_pick.get("ticker") in cat_metrics:
+            best_ticker = ai_pick["ticker"]
+            reasoning = ai_pick.get("reasoning", "")
+            source = "AI"
+        else:
+            best_ticker = best_ticker_by_sharpe
+            reasoning = "Selected by highest historical Sharpe Ratio (AI unavailable or invalid response)."
+            source = "Sharpe fallback"
+
+        chosen_assets[cat] = best_ticker
+        selection_metrics[cat] = {
+            "Winner": best_ticker,
+            "Competitors": cat_metrics,
+            "Reasoning": reasoning,
+            "Selected By": source,
+        }
                     
     # --- 1.5 CORRELATION PENALTY (Avoid Concentration Risk) ---
-    # If two chosen assets are highly correlated (> 0.90), we want to flag it.
-    # We will remove the lower-performing one to prevent overlaps (e.g., QQQ and VUG).
+    # If two chosen assets are highly correlated (> 0.90), keep the one with
+    # the higher Sharpe Ratio. We compare pairs in order of HIGHEST correlation
+    # first and skip pairs whose tickers were already dropped, so a ticker that
+    # was eliminated earlier can never push another (innocent) ticker out.
     if len(chosen_assets) > 1:
         selected_tickers = list(chosen_assets.values())
         corr_matrix = daily_returns[selected_tickers].corr()
-        
-        to_drop = set()
+
+        # Collect every (corr, a, b) above threshold, sorted desc so we
+        # resolve the most-similar pairs first.
+        candidate_pairs = []
         for i in range(len(selected_tickers)):
             for j in range(i + 1, len(selected_tickers)):
-                ticker_a = selected_tickers[i]
-                ticker_b = selected_tickers[j]
-                
-                # Check if correlation is extremely high
-                if corr_matrix.loc[ticker_a, ticker_b] > 0.90:
-                    # They are too similar. Keep the one with the higher Sharpe Ratio.
-                    sharpe_a = (daily_returns[ticker_a].mean() * 252 - 0.02) / (daily_returns[ticker_a].std() * np.sqrt(252))
-                    sharpe_b = (daily_returns[ticker_b].mean() * 252 - 0.02) / (daily_returns[ticker_b].std() * np.sqrt(252))
-                    
-                    if sharpe_a > sharpe_b:
-                        to_drop.add(ticker_b)
-                        print(f"Correlation Flag: Dropped {ticker_b} in favor of {ticker_a} (Corr: {corr_matrix.loc[ticker_a, ticker_b]:.2f})")
-                    else:
-                        to_drop.add(ticker_a)
-                        print(f"Correlation Flag: Dropped {ticker_a} in favor of {ticker_b} (Corr: {corr_matrix.loc[ticker_a, ticker_b]:.2f})")
-        
-        # Remove the correlated losers from the chosen assets dictionary
-        chosen_assets = {cat: ticker for cat, ticker in chosen_assets.items() if ticker not in to_drop}
+                a, b = selected_tickers[i], selected_tickers[j]
+                c = corr_matrix.loc[a, b]
+                if c > 0.90:
+                    candidate_pairs.append((c, a, b))
+        candidate_pairs.sort(key=lambda x: x[0], reverse=True)
+
+        to_drop = set()
+        for c, ticker_a, ticker_b in candidate_pairs:
+            # Skip pairs where one side was already dropped; we never want a
+            # dead ticker to influence further eliminations.
+            if ticker_a in to_drop or ticker_b in to_drop:
+                continue
+
+            sharpe_a = (
+                (daily_returns[ticker_a].mean() * 252 - RISK_FREE_RATE)
+                / (daily_returns[ticker_a].std() * np.sqrt(252))
+            )
+            sharpe_b = (
+                (daily_returns[ticker_b].mean() * 252 - RISK_FREE_RATE)
+                / (daily_returns[ticker_b].std() * np.sqrt(252))
+            )
+
+            loser, winner = (
+                (ticker_b, ticker_a) if sharpe_a > sharpe_b else (ticker_a, ticker_b)
+            )
+            to_drop.add(loser)
+            print(
+                f"Correlation Flag: Dropped {loser} in favor of {winner} "
+                f"(Corr: {c:.2f})"
+            )
+
+        chosen_assets = {
+            cat: ticker for cat, ticker in chosen_assets.items() if ticker not in to_drop
+        }
 
 
     # Ensure we actually picked *something*
     if not chosen_assets:
-        return {"VOO": 0.60, "BND": 0.40}
+        fallback = {"VOO": 0.60, "BND": 0.40}
+        return fallback, selection_metrics, ""
 
     # --- 2. DATA-DRIVEN WEIGHT OPTIMIZATION (Inverse Volatility / Risk Parity) ---
     # Determine the risk limits based on user profile
@@ -155,7 +279,17 @@ def allocate_portfolio(age: int, risk_tolerance: str, income: float, preferred_c
 
     # Return normalized and rounded dictionary, plus the selection metrics
     final_weights = {k: round(v, 4) for k, v in portfolio.items() if v > 0}
-    return final_weights, selection_metrics
+
+    # --- 3. AI-DRIVEN PORTFOLIO ANALYSIS ---
+    # Reuse the same user_profile dict that was passed to per-category picks
+    # so the qualitative write-up is consistent with the selection rationale.
+    try:
+        ai_analysis = ai_analyze_portfolio(user_profile, final_weights)
+    except Exception as exc:  # noqa: BLE001 — never let AI break the pipeline
+        print(f"[allocation_engine] AI portfolio analysis failed: {exc}")
+        ai_analysis = ""
+
+    return final_weights, selection_metrics, ai_analysis
 
 def _rule_based_allocation(age: int, risk_tolerance: str, income: float, preferred_categories: list, horizon: int, panic_response: str) -> dict:
     """
