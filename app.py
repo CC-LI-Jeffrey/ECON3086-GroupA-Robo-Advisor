@@ -126,7 +126,11 @@ if st.sidebar.button("Generate Portfolio"):
     fetch_tickers = tuple(sorted(set(candidate_tickers + ["^SPX", "VOO", "BND"])))
 
     with st.spinner("Analyzing historical market data and consulting the AI advisor..."):
-        historical_prices = cached_fetch_etf_data(fetch_tickers, "5y")
+        try:
+            historical_prices = cached_fetch_etf_data(fetch_tickers, "5y")
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
 
         # --- 3. ALLOCATE (Selection & Optimization, with AI commentary) ---
         weights, selection_metrics, ai_analysis = cached_allocate_portfolio(
@@ -179,12 +183,70 @@ if st.sidebar.button("Generate Portfolio"):
     # --- 4. CALCULATE METRICS FOR DISPLAY ---
     st.subheader("2. Historical Backtest & Metrics")
 
-    port_prices = historical_prices[list(weights.keys())]
-    bench_prices = historical_prices[["^SPX"]]
+    # Filter weights to only include tickers that have actual price data
+    available_weights = {
+        ticker: weight 
+        for ticker, weight in weights.items() 
+        if ticker in historical_prices.columns
+    }
+    
+    if not available_weights:
+        st.warning(
+            "⚠️ Unable to fetch historical price data for the recommended ETFs. "
+            "This may be due to network issues or API rate limiting from Yahoo Finance. "
+            "Please wait a moment and try again."
+        )
+        st.stop()
+    
+    if len(available_weights) < len(weights):
+        missing_tickers = set(weights.keys()) - set(available_weights.keys())
+        st.info(
+            f"📊 Note: Data unavailable for {len(missing_tickers)} ticker(s) ({', '.join(missing_tickers)}). "
+            f"Showing metrics for available tickers."
+        )
+    
+    # Normalize weights to sum to 1.0 after filtering
+    total_weight = sum(available_weights.values())
+    if total_weight > 0:
+        available_weights = {t: w / total_weight for t, w in available_weights.items()}
 
-    port_cum_returns = calculate_cumulative_returns(port_prices, weights)
-    bench_cum_returns = calculate_cumulative_returns(bench_prices, {"^SPX": 1.0})
-    metrics = calculate_metrics(port_cum_returns, bench_cum_returns)
+    port_prices = historical_prices[list(available_weights.keys())]
+    
+    # Only get benchmark if available
+    bench_prices = None
+    if "^SPX" in historical_prices.columns:
+        bench_prices = historical_prices[["^SPX"]]
+
+    port_cum_returns = calculate_cumulative_returns(port_prices, available_weights)
+    
+    bench_cum_returns = None
+    if bench_prices is not None:
+        try:
+            bench_cum_returns = calculate_cumulative_returns(bench_prices, {"^SPX": 1.0})
+            metrics = calculate_metrics(port_cum_returns, bench_cum_returns)
+        except Exception as e:
+            print(f"[app] Could not calculate benchmark metrics: {e}")
+            metrics = {
+                "Portfolio Return": 0,
+                "Benchmark Return": 0,
+                "Portfolio Volatility": 0,
+                "Benchmark Volatility": 0,
+                "Sharpe Ratio": 0,
+                "Benchmark Sharpe": 0,
+                "Max Drawdown": 0,
+                "Benchmark Max Drawdown": 0,
+            }
+    else:
+        metrics = {
+            "Portfolio Return": 0,
+            "Benchmark Return": 0,
+            "Portfolio Volatility": 0,
+            "Benchmark Volatility": 0,
+            "Sharpe Ratio": 0,
+            "Benchmark Sharpe": 0,
+            "Max Drawdown": 0,
+            "Benchmark Max Drawdown": 0,
+        }
 
     # Future-value projection now respects the user's monthly contribution
     # via the ordinary-annuity formula in `_projected_future_value`.
@@ -206,7 +268,30 @@ if st.sidebar.button("Generate Portfolio"):
     m_col4.metric("Max Drawdown", f"{metrics['Max Drawdown']*100:.2f}%")
 
     # --- 5. DISPLAY CHARTS ---
-    fig_line = plot_performance(port_cum_returns, bench_cum_returns, benchmark_name="S&P 500")
+    if bench_cum_returns is not None:
+        fig_line = plot_performance(port_cum_returns, bench_cum_returns, benchmark_name="S&P 500")
+    else:
+        # Create a simple portfolio-only chart if benchmark is unavailable
+        import plotly.graph_objects as go
+        fig_line = go.Figure()
+        portfolio_returns_pct = (port_cum_returns - 1) * 100
+        fig_line.add_trace(go.Scatter(
+            x=port_cum_returns.index,
+            y=port_cum_returns.values,
+            mode='lines',
+            name='Your Portfolio',
+            line=dict(color='#2E86AB', width=3),
+            fill='tozeroy',
+            fillcolor='rgba(46, 134, 171, 0.1)',
+            hovertemplate='<b>Portfolio</b><br>Value: $%{y:.2f}<br>Return: %{customdata:.2f}%<extra></extra>',
+            customdata=portfolio_returns_pct.values
+        ))
+        fig_line.update_layout(
+            title="<b>Historical Portfolio Performance</b>",
+            xaxis_title="<b>Date</b>",
+            yaxis_title="<b>Cumulative Return ($1 → $X)</b>",
+            template="plotly_white"
+        )
     st.plotly_chart(fig_line, use_container_width=True)
 
     # --- 6. AI PORTFOLIO ANALYSIS ---
