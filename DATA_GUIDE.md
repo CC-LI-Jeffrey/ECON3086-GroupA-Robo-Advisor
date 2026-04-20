@@ -286,3 +286,12 @@ If you get stuck:
 
 **Last Updated:** 2026-04-20  
 **Status:** App working with sample data. Real data download requires unrestricted internet access.
+
+## Data Source
+- **Method**: Online API via yfinance Python library
+- **Source**: Yahoo Finance API  
+- **Process**: 
+  1. download_historical_data.py calls yfinance.download() for each ETF
+  2. Fetches real market data online from Yahoo Finance API
+  3. Caches to CSV files for offline use and performance
+- **Data**: 98 ETFs × 5 years = 1,256 trading days per ticker
