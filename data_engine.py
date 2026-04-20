@@ -2,6 +2,7 @@ import os
 
 import pandas as pd
 import yfinance as yf
+from tradingview_screener import Query, Column
 
 # Member 2: Data Pipeline & ETF Universe
 # Loads the static ETF universe from etf.csv and pulls historical prices from
@@ -13,25 +14,90 @@ _ETF_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "etf.cs
 
 
 def get_etf_universe():
-    """Return the curated ETF universe as `{symbol: {"Asset Class", "Expense Ratio"}}`.
+    """
+    Retrieves a dictionary of ETFs and their metadata.
 
-    Note: expense ratios are kept at full precision (typical values are
-    ~0.0003 to ~0.005, i.e. 3-50 basis points). Aggressive rounding here
-    would collapse most rows to 0.0 and starve downstream callers (e.g. the
-    AI selector) of the data they need to discriminate.
+    Workflow:
+    1. Attempts to query live data from TradingView's 'america' market.
+    2. Filters for primary ETF listings on major US exchanges (AMEX, NYSE, NASDAQ).
+    3. Maps internal TradingView hex-IDs to human-readable asset classes (Equity, Bonds, etc.).
+    4. Provides a fallback to a local CSV file if the API call fails or the library is unavailable.
+
+    Returns:
+        dict: A dictionary keyed by ticker symbol, containing Asset Class, Expense Ratio, and ETF Type.
     """
     universe = {}
-    df = pd.read_csv(_ETF_CSV_PATH)
-    for _, row in df.iterrows():
-        symbol = str(row['Symbol']).strip()
-        universe[symbol] = {
-            "Asset Class": str(row['Asset class']).strip(),
-            "Expense Ratio": float(row['Expense ratio']),
-        }
 
-    print(f"Successfully loaded {len(universe)} ETFs from {_ETF_CSV_PATH}.")
-    return universe
+    ASSET_CLASS_MAP = {
+        "c05f85d35d1cd0be6ebb2af4be16e06a": "Equity",  # Stocks
+        "b6e443a6c4a8a2e7918c5dbf3d45c796": "Fixed Income",  # Bonds
+        "8fe80395f389e29e3ea42210337f0350": "Commodity",  # Commodities
+        "1af0389838508d7016a9841eb6273962": "Cryptocurrency",
+        "4071518f1736a5a43dae51b47590322f": "Alternative",  # Real Estate/Alt
+    }
 
+    try:
+        # Querying the American market for ETFs across major exchanges
+        q = (Query()
+             .set_markets('america')
+             .select(
+            'name', 'exchange', 'asset_class',
+            'expense_ratio', 'is_primary'
+        )
+             .where(Column("type") == "fund")
+             .where(Column("typespecs").has("etf"))
+             .where(Column("exchange").isin(["AMEX", "NYSE", "NASDAQ"]))
+             .where(Column("is_primary") == True)
+             .limit(10000)
+             .get_scanner_data())
+
+        count, df = q
+
+        if df.empty:
+            raise ValueError("TradingView returned an empty dataset.")
+
+        for _, row in df.iterrows():
+            symbol = str(row['name']).strip()
+
+            # 1. Map raw asset class IDs to human-readable strings
+            raw_asset_class = str(row['asset_class']) if pd.notnull(row['asset_class']) else ""
+            asset_label = ASSET_CLASS_MAP.get(raw_asset_class, "N/A")
+
+            # Skip ETFs without a valid asset class mapping
+            if asset_label == "N/A":
+                continue
+
+            # 2. Process Expense Ratio (keeping precision for downstream filtering)
+            raw_exp = row['expense_ratio']
+            exp_ratio = float(raw_exp) if pd.notnull(raw_exp) else 0.0
+
+            universe[symbol] = {
+                "Asset Class": asset_label,
+                "Expense Ratio": exp_ratio,
+            }
+
+        print(f"Successfully loaded {len(universe)} ETFs via API.")
+        return universe
+
+    except Exception as e:
+        # Fallback mechanism if API fails (e.g., no internet or module error)
+        print(f"API Fetch failed ({e}). Switching to local CSV fallback...")
+
+        if not os.path.exists(_ETF_CSV_PATH):
+            print(f"Error: Backup file {_ETF_CSV_PATH} not found.")
+            return {}
+
+        # Read from the local etf.csv as defined in the original project contract
+        df_csv = pd.read_csv(_ETF_CSV_PATH)
+        for _, row in df_csv.iterrows():
+            symbol = str(row['Symbol']).strip()
+            universe[symbol] = {
+                "Asset Class": str(row['Asset class']).strip(),
+                "Expense Ratio": float(row['Expense ratio']),
+            }
+
+        print(f"Loaded {len(universe)} ETFs from local CSV.")
+        return universe
 
 def fetch_etf_data(tickers, period: str = "5y"):
     """Download historical adjusted close prices from Yahoo Finance.
