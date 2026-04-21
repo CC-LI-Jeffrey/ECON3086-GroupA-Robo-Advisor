@@ -111,7 +111,7 @@ def get_etf_universe():
             }
         print(f"Loaded {len(universe)} ETFs from local CSV.")
         return universe
-get_etf_universe()
+
 def fetch_etf_data(tickers, period: str = "5y"):
     """Download historical adjusted close prices from Yahoo Finance.
 
