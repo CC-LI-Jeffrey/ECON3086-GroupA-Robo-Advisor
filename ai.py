@@ -81,6 +81,14 @@ def submit(
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"]
+    except requests.HTTPError as exc:
+        detail = ""
+        if exc.response is not None:
+            detail = (exc.response.text or "")[:800]
+        print(f"[ai.submit] AI request failed: {exc}")
+        if detail.strip():
+            print(f"[ai.submit] Response body: {detail.strip()}")
+        return None
     except Exception as exc:  # noqa: BLE001 — we want to swallow ALL failures
         print(f"[ai.submit] AI request failed: {exc}")
         return None
