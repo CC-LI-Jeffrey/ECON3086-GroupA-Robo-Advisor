@@ -1,42 +1,81 @@
-# ECON3086 - Group A: Robo-Advisor Project
+# ECON3086 — Group A: Robo-Advisor Project
 
-Welcome to the Group A Robo-Advisor project! This document outlines our project structure, workload distribution, and our coding standards.
+Welcome to the Group A Robo-Advisor project. 
 
-## 🚀 How to Run the App
+This document explains how to run the app step by step, plus how we split work and module contracts.
 
-1. Install the required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. Run the Streamlit application:
-   ```bash
-   streamlit run app.py
-   ```
+---
 
-## 👥 Workload Distribution & Modules
+## Step-by-step: run the app
 
-We have split the project into 5 modular files. Everyone can work on their file simultaneously because we are using **Mock Data**. Do not change the function names or their expected inputs/outputs (the "Interfaces") without telling the group!
+### Step 1 — Open the project folder in a terminal
 
-*   **Member 1 (UI/UX) -> `app.py`**
-    *   Builds the Streamlit interface.
-    *   Calls functions from the other modules to display the final app.
-*   **Member 2 (Data) -> `data_engine.py`**
-    *   Fetches ETF data from Yahoo Finance (`yfinance`).
-    *   Filters the ETF universe based on our criteria.
-*   **Member 3 (Math/Quant) -> `metrics_engine.py`**
-    *   Calculates financial metrics (Sharpe ratio, max drawdown, annualized returns).
-*   **Member 4 (Strategy) -> `allocation_engine.py`**
-    *   Uses the user's age, income, and risk tolerance to output a dictionary of ETF weights.
-*   **Member 5 (Visuals) -> `visuals_engine.py`**
-    *   Uses Plotly/Matplotlib to create interactive charts for the Streamlit app.
+Change to the repository root (the folder that contains `app.py` and `requirements.txt`):
 
-## 🤝 The "Contract" (Interfaces)
+```bash
+cd /path/to/ECON3086-GroupA-Robo-Advisor
+```
 
-To work in parallel, we agree on inputs and outputs for our main functions. Each `.py` file currently returns **fake (mock) data**. 
-Your job is to replace the fake data inside your assigned file with the *real* calculated data using pandas, numpy, etc.
+### Step 2 —  Use a virtual environment (Recommended)
 
-*   `allocate_portfolio(age, risk_tolerance, income, preferred_categories, horizon, panic_response)` returns a dictionary: `{"VOO": 0.6, "BND": 0.4}`
-*   `fetch_etf_data(tickers, period)` returns a `pandas.DataFrame` where columns are tickers and the index is dates.
-*   `calculate_metrics(portfolio_cum_returns, benchmark_cum_returns)` returns a dictionary of floats: `{"Annualized Return": 0.08, "Sharpe": 1.2, ...}`
+This keeps dependencies isolated from your system Python.
 
-Happy coding!
+```bash
+python3 -m venv .venv
+source .venv/bin/activate    # macOS / Linux
+# Windows: .venv\Scripts\activate
+```
+
+Skip this step if you already manage environments another way.
+
+### Step 3 — Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+Wait until all packages finish installing without errors.
+
+### Step 4 — Set the **HKBU GenAI API key**
+
+#### A. Generate the API key (HKBU GenAI website)
+
+1. **Open the URL** in your browser: [https://genai.hkbu.edu.hk](https://genai.hkbu.edu.hk)
+2. Click the control in the **bottom-left corner** of the page (menu / account area).
+3. Click **Profile and Settings**.
+4. Click **API**.
+5. Click **Generate API** to create a key.
+6. **Copy the API key** and paste it into `.env` as described below (do not share the key in chat, screenshots, or git).
+
+#### B. Put the key in `.env` (project root)
+
+1. In the **project root**, create your local env file from the tracked example:
+  ```bash
+   cp .env.example .env
+  ```
+   On Windows PowerShell: `Copy-Item .env.example .env`
+2. Open `.env`, set `HKBU_AI_API_KEY` to your copied key (no quotes unless required).
+3. Start the app from the **same project root** so `python-dotenv` can load `.env`.
+
+### Step 5 — Start Streamlit
+
+From the project root:
+
+```bash
+streamlit run app.py
+```
+
+Your browser should open the app.
+
+### Step 6 — Verify the AI connection (Optional)
+
+After you set `HKBU_AI_API_KEY` in Step 4:
+
+```bash
+python _test_ai_live.py
+```
+
+If the key is missing, the script would tells you to set `HKBU_AI_API_KEY` in `.env`.
+
+---
+
